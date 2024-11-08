@@ -4,7 +4,7 @@ import { PublicKey } from "@solana/web3.js";
 import { Balance, Block, BlockHeader, Instruction, TokenBalance } from "@subsquid/solana-objects";
 import BN from "bn.js";
 import { Account, AccountData, AccountTransaction, IndexedTreeLeafUpdate, LeafNullification, RawIndexedElement, StateUpdate } from "../states/states";
-import { IndexedMerkleTreeEvent, NullifierEvent } from "./events";
+import { IndexedMerkleTreeEvent, IndexedMerkleTreeEventStruct, NullifierEvent, NullifierEventStruct } from "./events";
 
 export const ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey("compr6CUsB5m2jS4Y3831ztGSTnDpnKJTKS95d64XVq");
 export const VOTE_PROGRAM_ID = new PublicKey("Vote111111111111111111111111111111111111111");
@@ -34,7 +34,7 @@ function parseIndexedMerkleTreeUpdate(indexedMerkleTreeEvent: IndexedMerkleTreeE
     return stateUpdate;
 }
 
-function parseNullifierEvent(tx: string, nullifierEvent: NullifierEvent): StateUpdate {
+function parseNullifierEvent(signature: string, nullifierEvent: NullifierEvent): StateUpdate {
     const { id, nullifiedLeavesIndices, seq } = nullifierEvent;
     const stateUpdate = new StateUpdate();
 
@@ -42,9 +42,10 @@ function parseNullifierEvent(tx: string, nullifierEvent: NullifierEvent): StateU
         const leafIndex = nullifiedLeavesIndices[i];
         const leafNullification = new LeafNullification(
             new PublicKey(id),
-            leafIndex,
-            seq.add(new BN(1)),
-            tx,);
+            new BN(leafIndex.toString()),
+            new BN((seq + BigInt(1)).toString()),
+            signature
+        );
         stateUpdate.leafNullifications.add(leafNullification);
     }
 
@@ -101,11 +102,13 @@ export function parseTrx(trx: Trx): StateUpdate {
 
                     const { owner, lamports, address, data } = outAccount.compressedAccount;
 
-                    const accountData: AccountData = {
-                        discriminator: data.discriminator ? bs58.encode(data.discriminator) : undefined,
-                        data: data?.data ? bs58.encode(data.data) : undefined,
-                        dataHash: data?.dataHash ? bs58.encode(data?.dataHash) : undefined,
-                    };
+                    const accountData: AccountData = {};
+                    if (data) {
+                        accountData.discriminator = data?.discriminator ? bs58.encode(data.discriminator) : undefined
+                        accountData.data = data?.data ? bs58.encode(data.data) : undefined
+                        accountData.dataHash = data?.dataHash ? bs58.encode(data?.dataHash) : undefined
+                    }
+
 
                     const enrichedAccount: Account = {
                         owner: owner.toString(),
@@ -132,70 +135,35 @@ export function parseTrx(trx: Trx): StateUpdate {
                     stateUpdates.push(stateUpdate);
                 }
             }
+        }
 
-            // if (orderedInstructions.length - index > 1) {
-            //     const nextInstruction = orderedInstructions[index + 1];
-            //     if (instruction.programId == ACCOUNT_COMPRESSION_PROGRAM_ID.toBase58()
-            //         && nextInstruction.programId == NOOP_PROGRAM_ID.toBase58()) {
-            //         isCompressionTransaction = true;
-            //         const tx = instruction.getTransaction()
-            //         if (tx.err === null) {
+        if (orderedInstructions.length - index > 1) {
+            const nextInstruction = orderedInstructions[index + 1];
+            if (instruction.programId == ACCOUNT_COMPRESSION_PROGRAM_ID.toBase58()
+                && nextInstruction.programId == NOOP_PROGRAM_ID.toBase58()) {
+                isCompressionTransaction = true;
+                console.log(NOOP_PROGRAM_ID, " ==>", nextInstruction.data);
 
-            //             console.log(`processed: ${tx.signatures[0]}`)
+                const buf = bs58.decode(nextInstruction.data);
 
-            //             // console.dir({instruction,nextInstruction});
+                try {
+                    const nullifierEvent = NullifierEventStruct.decode(buf);
+                    // console.log(nullifierEvent, { depth: null });
+                    const stateUpdate = parseNullifierEvent(trx.signatures[0], nullifierEvent);
+                    stateUpdates.push(stateUpdate);
+                    continue
+                } catch (__) { }
 
-            //             if (bs58.decode(nextNextInstruction.data).length < 1) {
-            //                 continue
-            //             }
+                try {
+                    const indexedMerkleTreeEvent = IndexedMerkleTreeEventStruct.decode(buf);
+                    console.log(indexedMerkleTreeEvent, { depth: null });
+                    const stateUpdate = parseIndexedMerkleTreeUpdate(indexedMerkleTreeEvent);
+                    stateUpdates.push(stateUpdate);
+                    continue
+                } catch (__) { }
 
-            //             try {
-            //                 const changelogEvent = deserializeChangeLogEventV1(bs58.decode(nextNextInstruction.data));
-            //                 console.dir({ type: 'changelog', changelogEvent }, { depth: null });
-            //                 continue;
-            //             } catch (err) {
-            //                 try {
-            //                     const applicationData = deserializeApplicationDataEvent(bs58.decode(nextNextInstruction.data));
-            //                     // console.dir({ type: 'applicationData', applicationData }, { depth: null });
-
-            //                     try {
-            //                         const buf = bs58.decode(nextNextInstruction.data);
-
-            //                         buf.subarray(0, publicKey().span)
-
-            //                         console.dir(publicKey().decode(buf.subarray(0, publicKey().span)));
-            //                         console.dir(seq(u64(), 10).decode(buf, 32));
-            //                         console.dir(u64().decode(buf, 32 + seq(u64(), 5).span));
-
-            //                         console.log("count ====> ", Math.round((buf.length - (publicKey().span + u64().span)) / u64().span), buf.length, publicKey().span, u64().span, applicationData.fields[0].applicationData.length);
-
-            //                         // const id = publicKey().decode(buf);
-            //                         // const indices = seq(u256(), )
-            //                         // // const seq = u256().decode(buf)
-
-            //                         // const NullifierEventStruct = struct<NullifierEvent>([
-            //                         //     publicKey('id').decode(),
-            //                         //     seq(u256(), 0, 'nullifiedLeavesIndices'),
-            //                         //     u256('seq')
-            //                         // ]);
-
-            //                         // console.dir(NullifierEventStruct.decode(buf));
-            //                         continue
-            //                     } catch (err) {
-            //                         console.error(err);
-            //                         try {
-            //                             console.dir(IndexedMerkleTreeEventStruct.decode(bs58.decode(nextNextInstruction.data)));
-            //                             continue
-            //                         } catch (___) { }
-            //                     }
-            //                     continue
-            //                 } catch (__) { }
-            //             }
-
-            //             console.log(`missed: ${tx.signatures[0]}`)
-            //         }
-            //     }
-            // }
+                console.log(`missed: ${trx.signatures[0]}`)
+            }
         }
     }
 

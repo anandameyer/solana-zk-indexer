@@ -3,7 +3,6 @@ import { augmentBlock } from '@subsquid/solana-objects'
 import { DataSourceBuilder, SolanaRpcClient } from '@subsquid/solana-stream'
 import { TypeormDatabase } from '@subsquid/typeorm-store'
 import { mergedTrx, parseTrx } from './parsers/parsers'
-import { persistStateUpdate } from './stores/persistStateUpdate'
 
 // First we create a DataSource - component,
 // that defines where to get the data and what data should we get.
@@ -161,7 +160,8 @@ run(dataSource, database, async ctx => {
         for (let trx of trxs) {
             const stateUpdate = parseTrx(trx);
             if (stateUpdate.outAccounts.length > 0) console.dir(stateUpdate, { depth: null });
-            await persistStateUpdate(ctx.store, stateUpdate);
+            if ([...stateUpdate.leafNullifications].length > 0) console.dir(stateUpdate, { depth: null });
+            // await persistStateUpdate(ctx.store, stateUpdate);
         }
     }
 })
