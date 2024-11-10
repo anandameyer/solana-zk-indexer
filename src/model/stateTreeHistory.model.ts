@@ -7,7 +7,7 @@
 //     pub transaction_signature: Vec<u8>,
 // }
 
-import { Entity, Index, IntColumn, PrimaryColumn, StringColumn } from '@subsquid/typeorm-store'
+import { BigIntColumn, Entity, Index, IntColumn, PrimaryColumn, StringColumn } from '@subsquid/typeorm-store'
 
 @Entity()
 export class StateTreeHistories {
@@ -23,7 +23,7 @@ export class StateTreeHistories {
     tree!: string
 
     @Index()
-    @IntColumn()
+    @BigIntColumn()
     seq!: number
 
     @IntColumn()

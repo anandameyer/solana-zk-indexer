@@ -10,7 +10,7 @@
 // }
 
 
-import { Entity, Index, IntColumn, PrimaryColumn, StringColumn } from '@subsquid/typeorm-store'
+import { BigIntColumn, Entity, Index, IntColumn, PrimaryColumn, StringColumn } from '@subsquid/typeorm-store'
 
 @Entity()
 export class StateTrees {
@@ -38,6 +38,6 @@ export class StateTrees {
     @StringColumn()
     hash!: string
 
-    @IntColumn()
+    @BigIntColumn()
     seq!: number
 }

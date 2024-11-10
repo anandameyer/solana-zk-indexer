@@ -14,6 +14,64 @@ const PAGE_LIMIT = 1000;
 const HIGHEST_ADDRESS_PLUS_ONE = new BN("452312848583266388373324160190187140051835877600158453279131187530910662655");
 
 
+export async function persistStateUpdate(store: Store, stateUpdate: StateUpdate) {
+
+    // we store content of state update for easy indexing, this will easing our way to lookup data.
+    // https://solana.com/developers/courses/state-compression/generalized-state-compression#a-theoretical-overview-of-state-compression
+
+    const { inAccounts, outAccounts, accountTransactions, transactions, leafNullifications, indexedMerkleTreeUpdate } = stateUpdate;
+    await appendOutputAccounts(store, outAccounts);
+    await spendInputAccounts(store, inAccounts);
+    const accountToTransaction = [...accountTransactions].reduce((e, init) => (e.set(init.hash, init.signature)), new Map<string, string>());
+    const leafNodesWithSignatures: LeafNodeWithSignature[] = [
+        ...outAccounts.map(account => {
+            const signature = accountToTransaction.get(account.hash)?.slice() || bs58.encode(Uint8Array.from([0, ...Array(63).fill(0)]));
+            return {
+                node: accountToLeafNode(account),
+                signature,
+            } as LeafNodeWithSignature;
+        }),
+        ...[...leafNullifications].map(leafNullification => {
+            return {
+                node: leafNullificationToLeafNode(leafNullification),
+                signature: leafNullification.signature,
+            };
+        }),
+    ];
+
+    leafNodesWithSignatures.sort((a, b) => a.node.seq - b.node.seq);
+    await persistStateTreeHistory(store, leafNodesWithSignatures);
+    await persistLeafNodes(store, leafNodesWithSignatures.map(e => e.node), TREE_HEIGHT);
+
+    const transactionsVec = [...transactions].map(([_, tx]) => tx);
+
+    const [compressionTransactions, nonCompressionTransactions] = transactionsVec.reduce(
+        ([compression, nonCompression], tx) => {
+            if (tx.usesCompression) {
+                compression.push(tx);
+            } else {
+                nonCompression.push(tx);
+            }
+            return [compression, nonCompression];
+        },
+        [[] as TransactionSnapshot[], [] as TransactionSnapshot[]]
+    );
+
+    const nonCompressionTransactionsToKeep = Math.max(0, PAGE_LIMIT - compressionTransactions.length);
+    const transactionsToPersist = [
+        ...compressionTransactions,
+        ...nonCompressionTransactions.slice(0, nonCompressionTransactionsToKeep),
+    ];
+
+    await persistTransactions(store, transactionsToPersist, nonCompressionTransactionsToKeep);
+
+    const accountTransactionVec = [...accountTransactions].map(e => e);
+    await persistAccountTransaction(store, accountTransactionVec);
+
+    updateIndexedTree(store, indexedMerkleTreeUpdate, ADDRESS_TREE_HEIGHT);
+}
+
+
 export async function spendInputAccounts(store: Store, accounts: Set<string>) {
     const storedAccounts = await store.find(Accounts, { where: { id: `IN (${[...accounts].join(",")})` } });
     const balanceModifications: Map<string, bigint> = new Map();
@@ -178,62 +236,6 @@ interface LeafNodeWithSignature {
     signature: string
 }
 
-
-
-export async function persistStateUpdate(store: Store, stateUpdate: StateUpdate) {
-    const { inAccounts, outAccounts, accountTransactions, transactions, leafNullifications, indexedMerkleTreeUpdate } = stateUpdate;
-    await appendOutputAccounts(store, outAccounts);
-    await spendInputAccounts(store, inAccounts);
-    const accountToTransaction = [...accountTransactions].reduce((e, init) => (e.set(init.hash, init.signature)), new Map<string, string>());
-    const leafNodesWithSignatures: LeafNodeWithSignature[] = [
-        ...outAccounts.map(account => {
-            const signature = accountToTransaction.get(account.hash)?.slice() || bs58.encode(Uint8Array.from([0, ...Array(63).fill(0)]));
-            return {
-                node: accountToLeafNode(account),
-                signature,
-            } as LeafNodeWithSignature;
-        }),
-        ...[...leafNullifications].map(leafNullification => {
-            return {
-                node: leafNullificationToLeafNode(leafNullification),
-                signature: leafNullification.signature,
-            };
-        }),
-    ];
-
-    leafNodesWithSignatures.sort((a, b) => a.node.seq - b.node.seq);
-    await persistStateTreeHistory(store, leafNodesWithSignatures);
-    await persistLeafNodes(store, leafNodesWithSignatures.map(e => e.node), TREE_HEIGHT);
-
-    const transactionsVec = [...transactions].map(([_, tx]) => tx);
-
-    // debug!("Persisting transaction metadatas...");
-    const [compressionTransactions, nonCompressionTransactions] = transactionsVec.reduce(
-        ([compression, nonCompression], tx) => {
-            if (tx.usesCompression) {
-                compression.push(tx);
-            } else {
-                nonCompression.push(tx);
-            }
-            return [compression, nonCompression];
-        },
-        [[] as TransactionSnapshot[], [] as TransactionSnapshot[]]
-    );
-
-    const nonCompressionTransactionsToKeep = Math.max(0, PAGE_LIMIT - compressionTransactions.length);
-    const transactionsToPersist = [
-        ...compressionTransactions,
-        ...nonCompressionTransactions.slice(0, nonCompressionTransactionsToKeep),
-    ];
-
-    await persistTransactions(store, transactionsToPersist, nonCompressionTransactionsToKeep);
-
-    const accountTransactionVec = [...accountTransactions].map(e => e);
-    await persistAccountTransaction(store, accountTransactionVec);
-
-    updateIndexedTree(store, indexedMerkleTreeUpdate, ADDRESS_TREE_HEIGHT);
-}
-
 export async function persistStateTreeHistory(store: Store, nodes: LeafNodeWithSignature[]) {
     const stateTreeHistories = nodes.map(({ node, signature }) => {
         return new StateTreeHistories({
@@ -249,6 +251,14 @@ export async function persistStateTreeHistory(store: Store, nodes: LeafNodeWithS
 }
 
 export async function persistLeafNodes(store: Store, nodes: LeafNode[], treeHeight: number) {
+    if (nodes.length < 1) return;
+
+    // here we are looking trying to store leaf nodes.
+    // we are doing some mapping and look for stored tree state in database,
+    // since everytime one of leaf nodes changed, we need to changed the parent hash so on until the root hash.
+    // first we emulate location of the parent whose the leaf node changed and check if the parents has been stored in the database.
+    // https://spl.solana.com/account-compression/concepts.
+
     nodes.sort((a, b) => a.seq - b.seq);
     const leafLocations = nodes.map(node => ([node.tree, leafIndexToNodeIndex(node.leafIndex, treeHeight)] as [string, number]));
     const nodeLocationsToModels = await getProofNodes(store, leafLocations, true);
@@ -256,7 +266,7 @@ export async function persistLeafNodes(store: Store, nodes: LeafNode[], treeHeig
         Object.entries(nodeLocationsToModels).map(([key, value]) => [key, [value.hash, value.seq] as [string, number]])
     );
 
-    const modelsToUpdates = new Map();
+    const modelsToUpdates: Map<string, StateTrees> = new Map();
 
     for (const leafNode of nodes) {
         const nodeIdx = leafIndexToNodeIndex(leafNode.leafIndex, treeHeight);
@@ -279,7 +289,6 @@ export async function persistLeafNodes(store: Store, nodes: LeafNode[], treeHeig
             modelsToUpdates.set(key, model);
             nodeLocationsToHashesAndSeq.set(key, [leafNode.hash, leafNode.seq]);
         }
-
     }
 
     const allAncestors = nodes
@@ -316,13 +325,18 @@ export async function persistLeafNodes(store: Store, nodes: LeafNode[], treeHeig
         nodeLocationsToHashesAndSeq.set(`${tree},${nodeIndex}`, [hash, seq]);
     }
 
-    if (modelsToUpdates.size > 0) {
-        const updates = Object.entries(modelsToUpdates).map(([_, value]) => value);
-        await store.upsert(updates);
-    }
+    const updates = [...modelsToUpdates].map(([_, state]) => state)
+        .filter(e => e.leafIndex);
+    console.log("updates");
+    console.dir(updates, { depth: null });
+
+    if (updates.length > 0) await store.upsert(updates);
 }
 
 function computeParentHash(leftHash: string, rightHash: string) {
+    // photon indexer using poseidon with 2 params for parent hasing https://github.com/helius-labs/photon/blob/main/src/ingester/persist/mod.rs#L496.
+    // since light protocol js doesn't exposed poseidon hashing,
+    // we using js library with the same capability https://github.com/jmagan/poseidon-bls12381.
     const lb = bs58.decode(leftHash)
     const rb = bs58.decode(rightHash);
     const lbn = BigInt(new BN(lb).toString());
@@ -366,6 +380,10 @@ function getProofPath(index: number, includeLeaf: boolean): number[] {
 }
 
 async function getProofNodes(store: Store, leafNodesLocations: Array<[string, number]>, includeLeafs: boolean) {
+
+    console.log("leafNodesLocations");
+    console.dir(leafNodesLocations, { depth: null });
+
     const allRequiredNodeIndices = leafNodesLocations
         .flatMap(
             ([tree, index]) => getProofPath(index, includeLeafs).map((idx) => ([tree, idx] as [string, number]))
@@ -383,6 +401,8 @@ async function getProofNodes(store: Store, leafNodesLocations: Array<[string, nu
 
         stateTrees.push(...(await store.find(StateTrees, { where: { tree: tree, nodeIndex: nodeIdx } })));
     }
+
+    console.log(stateTrees, { depth: null });
 
     return new Map(
         stateTrees.map((node) => [`${node.tree},${node.nodeIndex}`, node])

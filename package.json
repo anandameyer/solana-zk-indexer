@@ -3,7 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "build": "rm -rf lib && tsc"
+    "build": "rm -rf lib && tsc",
+    "migration": "docker compose down && docker compose up -d && rm -rf db/migrations/* && npx tsc && npx squid-typeorm-migration generate",
+    "dev": "docker compose down && npx tsc && docker compose up -d && sleep 5 && npx squid-typeorm-migration apply && node -r dotenv/config lib/main.js"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.30.1",

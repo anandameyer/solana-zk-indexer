@@ -1,4 +1,4 @@
-import { struct, u32 } from "@solana/buffer-layout";
+import { cstr, seq, struct, u32, u8 } from "@solana/buffer-layout";
 import { publicKey } from "@solana/buffer-layout-utils";
 import { PublicKey } from "@solana/web3.js";
 import BN from "bn.js";
@@ -17,25 +17,9 @@ export const TokenDataStruct = struct<TokenData>([
     publicKey('owner'),
     u32('amount'),
     publicKey('delegate'),
-    // u32('state'),
+    // u8('state'),
     // cstr('tlv')
 ])
-
-interface EnrichedPathNode {
-    node: PathNode;
-    slot: BN;
-    tree: Uint8Array;
-    seq: BN;
-    level: number;
-    tree_depth: number;
-    leaf_index?: number;
-}
-
-interface PathUpdate {
-    tree: Uint8Array;
-    path: PathNode[];
-    seq: BN;
-}
 
 export class AccountTransaction {
     hash: string;
@@ -150,7 +134,6 @@ export type AccountData = {
 
 export type Account = {
     hash: string,
-    // address: string,
     address?: string
     data: AccountData,
     owner: string,
@@ -160,36 +143,3 @@ export type Account = {
     seq: number,
     slotCreated: number,
 }
-
-interface OutputCompressedAccountWithPackedContext {
-    compressedAccount: CompressedAccount;
-    merkleTreeIndex: number;
-}
-
-interface MerkleTreeSequenceNumber {
-    pubkey: PublicKey;
-    seq: BN;
-}
-
-interface CompressedAccount {
-    owner: PublicKey;
-    lamports: number;
-    address?: Uint8Array;
-    data?: CompressedAccountData;
-}
-
-interface CompressedAccountData {
-    discriminator: Uint8Array;
-    data: Uint8Array;
-    dataHash: Uint8Array;
-}
-
-export interface PathNode {
-    node: PublicKey;
-    index: number;
-}
-
-export const PathNodeStruct = struct<PathNode>([
-    publicKey('node'),
-    u32('index')
-]);

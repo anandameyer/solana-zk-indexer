@@ -3,6 +3,7 @@ import { augmentBlock } from '@subsquid/solana-objects'
 import { DataSourceBuilder, SolanaRpcClient } from '@subsquid/solana-stream'
 import { TypeormDatabase } from '@subsquid/typeorm-store'
 import { mergedTrx, parseTrx } from './parsers/parsers'
+import { persistStateUpdate } from './stores/persistStateUpdate'
 
 // First we create a DataSource - component,
 // that defines where to get the data and what data should we get.
@@ -155,13 +156,17 @@ run(dataSource, database, async ctx => {
     console.log("start processing block");
 
     for (let block of blocks) {
-        // mergedTrx(block)
+        // for each block, we merged balances, token balances, and instructions into transactions,
+        // since we want to parse each transaction. Currently blocks contains such data separated.
         const trxs = mergedTrx(block);
         for (let trx of trxs) {
+            // we parse every transaction, make it as state update object to further data processing.
             const stateUpdate = parseTrx(trx);
+            // below code only for debugging purpose only.
             if (stateUpdate.outAccounts.length > 0) console.dir(stateUpdate, { depth: null });
             if ([...stateUpdate.leafNullifications].length > 0) console.dir(stateUpdate, { depth: null });
-            // await persistStateUpdate(ctx.store, stateUpdate);
+            // we processing state update and 
+            await persistStateUpdate(ctx.store, stateUpdate);
         }
     }
 })
